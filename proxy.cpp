@@ -6,26 +6,26 @@
 #include<process.h>
 #include<string.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 1024
+#define BUFFER 500000
 CRITICAL_SECTION cs;
-void proxy(char *sendbuf,int sendlen);
+void proxy(char *sendbuf,int sendlen, char *remote, int remotelen);
 bool addresschange(char *addr);
-char remotebuf[BUFFER] = {0x00,}; //받아오기
-int remotelen = BUFFER; // 받아오기
 char *domainip; // 도메인 주소 변환
 char *addr; // 도메인 추출
 void datachange(char *data, char *find, char *change);
 unsigned int WINAPI fn1(void* p) {
 	char recvbuf[BUFFER] = {0x00,} ;
 	int recvbuflen = BUFFER ;
+	char remotebuf[BUFFER] = {0x00,}; //받아오기
+	int remotelen = BUFFER; // 받아오기
 	SOCKET Client = (SOCKET) p ;
 	if(recv(Client, recvbuf, recvbuflen,0) > 0)
 	{
-		printf("%s\n",recvbuf);
-		proxy(recvbuf,recvbuflen) ;
-		
+		printf("%s\n",recvbuf);	
 	}
-		EnterCriticalSection(&cs);	
+	EnterCriticalSection(&cs);	
+	proxy(recvbuf,recvbuflen,remotebuf,remotelen);
+	
 			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
 			{
 				printf("ERROR : the buffer back to the sender\n");
@@ -36,8 +36,9 @@ unsigned int WINAPI fn1(void* p) {
 			else 
 			{
 				printf("send success\n");
-				memset(recvbuf,0x00,BUFFER);
 				memset(remotebuf,0x00,BUFFER);
+				memset(recvbuf,0x00,BUFFER);
+				memset(domainip,0x00,strlen(domainip));
 			}
 		LeaveCriticalSection(&cs);
 	return 0;
@@ -56,11 +57,13 @@ void remoteAddress(sockaddr_in *remoteAddr, ADDRESS_FAMILY sin_family, int port,
 	remoteAddr->sin_port = htons(port);
 	remoteAddr->sin_addr.s_addr = inet_addr(addr);
 }
-
 int getaddr(char *recv)
 {
-	char *buf1 = strstr(recv,"Host: ") + 6;
+	char *buf1 = strstr(recv,"Host: ");
 	char *buf2 = strstr(buf1,"\n");
+	if(buf1 != NULL)
+	{
+	buf1 = buf1 + 6;
 	int len = strlen(buf1) - strlen(buf2);
 	addr = (char *)malloc(len);
 	memset(addr,0x00,len);
@@ -70,22 +73,23 @@ int getaddr(char *recv)
 		printf("error : addr not get\n");
 		return 1;
 	}
+	}
 	return 0;
 }
-
-void proxy(char *sendbuf,int sendlen)
+void proxy(char *sendbuf,int sendlen, char *remote, int remotelen)
 {
-	int check=1;
+	int check=0;
 	char *data = "hacking";
 	char *chagedata = "ABCDEFG";
 	SOCKET RemoteSocket = INVALID_SOCKET;
 	struct sockaddr_in remoteAddr;
 	int port = 80;
 	getaddr(sendbuf);
-		if(addresschange(addr))
+		if(addresschange(addr) == false)
 		{
-			remoteAddress(&remoteAddr, AF_INET, port, domainip);
+			printf("error : getting ip\n");
 		}
+		else remoteAddress(&remoteAddr, AF_INET, port, domainip);
 
 	if((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
@@ -101,7 +105,7 @@ void proxy(char *sendbuf,int sendlen)
 		WSACleanup();
 		exit(0);
 	}
-
+	EnterCriticalSection(&cs);
 	if(send(RemoteSocket, sendbuf, sendlen, 0) == SOCKET_ERROR) //SOCKET_ERROR return -1;
 		{
 			printf("Error : Send an initial buffer\n");
@@ -109,19 +113,20 @@ void proxy(char *sendbuf,int sendlen)
 			WSACleanup();
 			exit(0);
 		}
-	if(recv(RemoteSocket, remotebuf, remotelen, 0) > 0)
+
+	if(recv(RemoteSocket, remote, remotelen, 0) > 0)
 		{
-			printf("%s",remotebuf);
+			printf("%s",remote);
 			if(check == 1)
-			datachange(remotebuf,data,chagedata);	
+			datachange(remote,data,chagedata);	
 		}
+	LeaveCriticalSection(&cs);
 }
 void datachange(char *data, char *find, char *change)
 {
 	int count = 0;
 	int datalen = strlen(data);
 	int changelen = strlen(find);
-	printf("%d  %d\n",datalen,changelen);
 	for(int i =0 ; i < datalen ; i++)
 	{
 			for(int j = 0 ; j < changelen ; j++)
@@ -142,16 +147,15 @@ void datachange(char *data, char *find, char *change)
 			}
 			count=0;
 	}
+	return ;
 }
-
 bool addresschange(char *addr)
 {
-	int i = 0;
 	struct hostent *hostinfo;
 	hostinfo = gethostbyname(addr);
-	if(hostinfo->h_addr_list[i] != NULL)
+	if(hostinfo->h_addr_list[0] != NULL)
 	{
-		domainip = inet_ntoa(*(struct in_addr*)hostinfo->h_addr_list[i]);
+		domainip = inet_ntoa(*(struct in_addr*)hostinfo->h_addr_list[0]);
 		return true;
 	}
 	return false;
