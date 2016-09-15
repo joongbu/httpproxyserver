@@ -13,23 +13,19 @@ bool addresschange(char *addr);
 char remotebuf[BUFFER] = {0x00,}; //받아오기
 int remotelen = BUFFER; // 받아오기
 char *domainip; // 도메인 주소 변환
-char *addr;
-void find(char * changebuf);
-int check = 1;
+char *addr; // 도메인 추출
+void datachange(char *data, char *find, char *change);
 unsigned int WINAPI fn1(void* p) {
 	char recvbuf[BUFFER] = {0x00,} ;
 	int recvbuflen = BUFFER ;
 	SOCKET Client = (SOCKET) p ;
-
 	if(recv(Client, recvbuf, recvbuflen,0) > 0)
 	{
 		printf("%s\n",recvbuf);
 		proxy(recvbuf,recvbuflen) ;
 		
 	}
-		EnterCriticalSection(&cs);
-
-		
+		EnterCriticalSection(&cs);	
 			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
 			{
 				printf("ERROR : the buffer back to the sender\n");
@@ -44,7 +40,6 @@ unsigned int WINAPI fn1(void* p) {
 				memset(remotebuf,0x00,BUFFER);
 			}
 		LeaveCriticalSection(&cs);
-
 	return 0;
 }
 void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, ULONG sin_addr)
@@ -54,7 +49,6 @@ void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, 
 	serverAddr->sin_port = htons(port);
 	serverAddr->sin_addr.s_addr = sin_addr;
 }
-
 void remoteAddress(sockaddr_in *remoteAddr, ADDRESS_FAMILY sin_family, int port, char *addr)
 {
 	ZeroMemory(remoteAddr, sizeof(*remoteAddr));
@@ -62,9 +56,10 @@ void remoteAddress(sockaddr_in *remoteAddr, ADDRESS_FAMILY sin_family, int port,
 	remoteAddr->sin_port = htons(port);
 	remoteAddr->sin_addr.s_addr = inet_addr(addr);
 }
+
 int getaddr(char *recv)
 {
-	char *buf1 = strstr(recv,"Host: ")+6;
+	char *buf1 = strstr(recv,"Host: ") + 6;
 	char *buf2 = strstr(buf1,"\n");
 	int len = strlen(buf1) - strlen(buf2);
 	addr = (char *)malloc(len);
@@ -77,20 +72,20 @@ int getaddr(char *recv)
 	}
 	return 0;
 }
+
 void proxy(char *sendbuf,int sendlen)
 {
-
+	int check=1;
+	char *data = "hacking";
+	char *chagedata = "ABCDEFG";
 	SOCKET RemoteSocket = INVALID_SOCKET;
 	struct sockaddr_in remoteAddr;
 	int port = 80;
-	if(check == 1) 
-	{
-		getaddr(sendbuf);
+	getaddr(sendbuf);
 		if(addresschange(addr))
 		{
 			remoteAddress(&remoteAddr, AF_INET, port, domainip);
 		}
-	}
 
 	if((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
@@ -114,10 +109,39 @@ void proxy(char *sendbuf,int sendlen)
 			WSACleanup();
 			exit(0);
 		}
-	while(recv(RemoteSocket, remotebuf, remotelen, 0) > 0)
+	if(recv(RemoteSocket, remotebuf, remotelen, 0) > 0)
 		{
-		printf("%s",remotebuf);		
+			printf("%s",remotebuf);
+			if(check == 1)
+			datachange(remotebuf,data,chagedata);	
 		}
+}
+void datachange(char *data, char *find, char *change)
+{
+	int count = 0;
+	int datalen = strlen(data);
+	int changelen = strlen(find);
+	printf("%d  %d\n",datalen,changelen);
+	for(int i =0 ; i < datalen ; i++)
+	{
+			for(int j = 0 ; j < changelen ; j++)
+			{
+				
+				if(data[i+j] == find[j])
+				{
+				count = count + 1;
+				}
+				
+			}
+			if(count == changelen)
+			{
+				for(int j = 0 ; j < changelen ; j++)
+				{
+						data[i+j] = change[j];
+				}
+			}
+			count=0;
+	}
 }
 
 bool addresschange(char *addr)
@@ -132,7 +156,6 @@ bool addresschange(char *addr)
 	}
 	return false;
 }
-
 int main(int argc, char **argv)
 {	
 	DWORD TIME = 1;
@@ -177,7 +200,6 @@ int main(int argc, char **argv)
 
 		exit(0);
 	}
-
 while(1)
 {
 	while((Client = accept(Listen,NULL,NULL)) != INVALID_SOCKET)
