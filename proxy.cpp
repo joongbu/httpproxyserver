@@ -6,25 +6,28 @@
 #include<process.h>
 #include<string.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 500000
+#define BUFFER 10000
 CRITICAL_SECTION cs;
-void proxy(char *sendbuf,int sendlen, char *remote, int remotelen);
+int proxy(char *sendbuf,int sendlen, char *remote);
 bool addresschange(char *addr);
 char *domainip; // 도메인 주소 변환
 char *addr; // 도메인 추출
 void datachange(char *data, char *find, char *change);
 unsigned int WINAPI fn1(void* p) {
-	char recvbuf[BUFFER] = {0x00,} ;
+	char recvbuf[BUFFER] ;
 	int recvbuflen = BUFFER ;
-	char remotebuf[BUFFER] = {0x00,}; //받아오기
+	char remotebuf[BUFFER] ; //받아오기
 	int remotelen = BUFFER; // 받아오기
 	SOCKET Client = (SOCKET) p ;
+	memset(recvbuf,0x00,BUFFER);
+	memset(remotebuf,0x00,BUFFER);
 	if(recv(Client, recvbuf, recvbuflen,0) > 0)
 	{
 		printf("%s\n",recvbuf);	
+		remotelen = proxy(recvbuf,recvbuflen,remotebuf);
+		
 	}
 	EnterCriticalSection(&cs);	
-	proxy(recvbuf,recvbuflen,remotebuf,remotelen);
 	
 			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
 			{
@@ -33,14 +36,10 @@ unsigned int WINAPI fn1(void* p) {
 				WSACleanup();
 				exit(0);
 			}
-			else 
-			{
 				printf("send success\n");
-				memset(remotebuf,0x00,BUFFER);
-				memset(recvbuf,0x00,BUFFER);
-				memset(domainip,0x00,strlen(domainip));
-			}
+				
 		LeaveCriticalSection(&cs);
+	
 	return 0;
 }
 void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, ULONG sin_addr)
@@ -68,7 +67,7 @@ int getaddr(char *recv)
 	addr = (char *)malloc(len);
 	memset(addr,0x00,len);
 	memcpy(addr,buf1,len-1);
-	if(addr == NULL)
+	if(addr == NULL || strstr(addr,":") != NULL)
 	{
 		printf("error : addr not get\n");
 		return 1;
@@ -76,24 +75,28 @@ int getaddr(char *recv)
 	}
 	return 0;
 }
-void proxy(char *sendbuf,int sendlen, char *remote, int remotelen)
+int proxy(char *sendbuf,int sendlen, char *remote)
 {
-	int check=0;
+	int check=1;
 	char *data = "hacking";
 	char *chagedata = "ABCDEFG";
 	SOCKET RemoteSocket = INVALID_SOCKET;
 	struct sockaddr_in remoteAddr;
 	int port = 80;
-	getaddr(sendbuf);
+	int remotelen = BUFFER;
+	if (getaddr(sendbuf) == 0)
+	{
 		if(addresschange(addr) == false)
 		{
 			printf("error : getting ip\n");
+			WSACleanup();
+			exit(0);
 		}
 		else remoteAddress(&remoteAddr, AF_INET, port, domainip);
-
+	}
 	if((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
-		printf("ERROR : Create a Socket for conneting to server");
+		printf("ERROR : Create a Socket for conneting to server\n");
 		WSACleanup();
 		exit(0);
 	}
@@ -116,11 +119,12 @@ void proxy(char *sendbuf,int sendlen, char *remote, int remotelen)
 
 	if(recv(RemoteSocket, remote, remotelen, 0) > 0)
 		{
-			printf("%s",remote);
+			printf("%s\n",remote);
 			if(check == 1)
 			datachange(remote,data,chagedata);	
 		}
 	LeaveCriticalSection(&cs);
+	return remotelen;
 }
 void datachange(char *data, char *find, char *change)
 {
@@ -210,6 +214,7 @@ while(1)
 	{
 		_beginthreadex(NULL,0, fn1,(void*)Client,0,NULL);
 	}	
+		memset(domainip,0x00,strlen(domainip));
 		DeleteCriticalSection(&cs);
 
 }
