@@ -6,34 +6,107 @@
 #include<process.h>
 #include<string.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 10000
+#define BUFFER 5000
+CRITICAL_SECTION cs;
 int proxy(char *sendbuf,int sendlen, char *remote);
 bool addresschange(char *addr);
 char *domainip; // 도메인 주소 변환
 char *addr; // 도메인 추출
 void datachange(char *data, char *find, char *change);
+unsigned int WINAPI fn2(void* p);
+char remotebuf[BUFFER] ; //받아오기
+int remotelen = BUFFER; // 받아오기
+void remoteAddress(sockaddr_in *remoteAddr, ADDRESS_FAMILY sin_family, int port, char *addr);
+int getaddr(char *recv);
 unsigned int WINAPI fn1(void* p) {
 	char recvbuf[BUFFER] ;
 	int recvbuflen = BUFFER ;
 	char remotebuf[BUFFER] ; //받아오기
 	int remotelen = BUFFER; // 받아오기
 	SOCKET Client = (SOCKET) p ;
+	SOCKET RemoteSocket = INVALID_SOCKET;
+	struct sockaddr_in remoteAddr;
+	int port = 80;
+	InitializeCriticalSection(&cs);
 	memset(recvbuf,0x00,BUFFER);
-	memset(remotebuf,0x00,BUFFER);
 	if(recv(Client, recvbuf, recvbuflen,0) > 0)
 	{
 		printf("%s\n",recvbuf);	
-		remotelen = proxy(recvbuf,recvbuflen,remotebuf);
-		if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
+		if (getaddr(recvbuf) == 0)
 		{
-			printf("ERROR : the buffer back to the sender\n");
-			closesocket(Client);
+			if(addresschange(addr) == false)
+			{
+				printf("error : getting ip\n");
+				WSACleanup();
+				exit(0);
+			}
+			else remoteAddress(&remoteAddr, AF_INET, port, domainip);
+		}
+		if((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
+		{
+			printf("ERROR : Create a Socket for conneting to server\n");
 			WSACleanup();
 			exit(0);
 		}
-		printf("send success\n");
-		memset(domainip,0x00,strlen(domainip));
+
+		if(connect(RemoteSocket, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) == SOCKET_ERROR) //SCOKET_ERROR return -1
+		{
+			printf("Error : Connect to server\n");
+			closesocket(RemoteSocket);
+			WSACleanup();
+			exit(0);
+		}
+		if(send(RemoteSocket, recvbuf, recvbuflen, 0) == SOCKET_ERROR) //SOCKET_ERROR return -1;
+		{
+			printf("Error : Send an initial buffer\n");
+			closesocket(RemoteSocket);
+			WSACleanup();
+			exit(0);
+		}
 	}
+	memset(remotebuf,0x00,BUFFER);
+	_beginthreadex(NULL,0, fn2,(void*)RemoteSocket,0,NULL);
+	while(1)
+	{
+		EnterCriticalSection(&cs);
+		if(remotebuf != NULL)
+		{
+			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
+			{
+				printf("Error : Send an initial client buffer\n");
+				closesocket(Client);
+				WSACleanup();
+				exit(0);
+
+			}
+			else
+			{
+			printf("send\n");
+			memset(remotebuf,0x00,BUFFER);
+			LeaveCriticalSection(&cs);
+			
+			}
+			
+		}	
+	}
+
+	memset(domainip,0x00,strlen(domainip));
+	return 0;
+}
+unsigned int WINAPI fn2(void* p)
+{
+	SOCKET RemoteSocket = (SOCKET) p ;
+	int check=1;
+	char *data = "hacking";
+	char *chagedata = "ABCDEFG";
+	EnterCriticalSection(&cs);
+	if(recv(RemoteSocket, remotebuf, remotelen, 0) > 0)
+	{
+		printf("%s\n",remotebuf);
+		if(check == 1)
+			datachange(remotebuf,data,chagedata);	
+	}
+	LeaveCriticalSection(&cs);
 	return 0;
 }
 void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, ULONG sin_addr)
@@ -68,55 +141,6 @@ int getaddr(char *recv)
 		}
 	}
 	return 0;
-}
-int proxy(char *sendbuf,int sendlen, char *remote)
-{
-	int check=1;
-	char *data = "hacking";
-	char *chagedata = "ABCDEFG";
-	SOCKET RemoteSocket = INVALID_SOCKET;
-	struct sockaddr_in remoteAddr;
-	int port = 80;
-	int remotelen = BUFFER;
-	if (getaddr(sendbuf) == 0)
-	{
-		if(addresschange(addr) == false)
-		{
-			printf("error : getting ip\n");
-			WSACleanup();
-			exit(0);
-		}
-		else remoteAddress(&remoteAddr, AF_INET, port, domainip);
-	}
-	if((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
-	{
-		printf("ERROR : Create a Socket for conneting to server\n");
-		WSACleanup();
-		exit(0);
-	}
-
-	if(connect(RemoteSocket, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) == SOCKET_ERROR) //SCOKET_ERROR return -1
-	{
-		printf("Error : Connect to server\n");
-		closesocket(RemoteSocket);
-		WSACleanup();
-		exit(0);
-	}
-	if(send(RemoteSocket, sendbuf, sendlen, 0) == SOCKET_ERROR) //SOCKET_ERROR return -1;
-	{
-		printf("Error : Send an initial buffer\n");
-		closesocket(RemoteSocket);
-		WSACleanup();
-		exit(0);
-	}
-
-	if(recv(RemoteSocket, remote, remotelen, 0) > 0)
-	{
-		printf("%s\n",remote);
-		if(check == 1)
-			datachange(remote,data,chagedata);	
-	}
-	return remotelen;
 }
 void datachange(char *data, char *find, char *change)
 {
