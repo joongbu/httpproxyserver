@@ -7,7 +7,6 @@
 #include<string.h>
 #pragma comment (lib, "Ws2_32.lib")
 #define BUFFER 10000
-CRITICAL_SECTION cs;
 int proxy(char *sendbuf,int sendlen, char *remote);
 bool addresschange(char *addr);
 char *domainip; // 도메인 주소 변환
@@ -25,21 +24,16 @@ unsigned int WINAPI fn1(void* p) {
 	{
 		printf("%s\n",recvbuf);	
 		remotelen = proxy(recvbuf,recvbuflen,remotebuf);
-		
+		if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
+		{
+			printf("ERROR : the buffer back to the sender\n");
+			closesocket(Client);
+			WSACleanup();
+			exit(0);
+		}
+		printf("send success\n");
+		memset(domainip,0x00,strlen(domainip));
 	}
-	EnterCriticalSection(&cs);	
-	
-			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
-			{
-				printf("ERROR : the buffer back to the sender\n");
-				closesocket(Client);
-				WSACleanup();
-				exit(0);
-			}
-				printf("send success\n");
-				
-		LeaveCriticalSection(&cs);
-	
 	return 0;
 }
 void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, ULONG sin_addr)
@@ -62,16 +56,16 @@ int getaddr(char *recv)
 	char *buf2 = strstr(buf1,"\n");
 	if(buf1 != NULL)
 	{
-	buf1 = buf1 + 6;
-	int len = strlen(buf1) - strlen(buf2);
-	addr = (char *)malloc(len);
-	memset(addr,0x00,len);
-	memcpy(addr,buf1,len-1);
-	if(addr == NULL || strstr(addr,":") != NULL)
-	{
-		printf("error : addr not get\n");
-		return 1;
-	}
+		buf1 = buf1 + 6;
+		int len = strlen(buf1) - strlen(buf2);
+		addr = (char *)malloc(len);
+		memset(addr,0x00,len);
+		memcpy(addr,buf1,len-1);
+		if(addr == NULL || strstr(addr,":") != NULL)
+		{
+			printf("error : addr not get\n");
+			return 1;
+		}
 	}
 	return 0;
 }
@@ -108,22 +102,20 @@ int proxy(char *sendbuf,int sendlen, char *remote)
 		WSACleanup();
 		exit(0);
 	}
-	EnterCriticalSection(&cs);
 	if(send(RemoteSocket, sendbuf, sendlen, 0) == SOCKET_ERROR) //SOCKET_ERROR return -1;
-		{
-			printf("Error : Send an initial buffer\n");
-			closesocket(RemoteSocket);
-			WSACleanup();
-			exit(0);
-		}
+	{
+		printf("Error : Send an initial buffer\n");
+		closesocket(RemoteSocket);
+		WSACleanup();
+		exit(0);
+	}
 
 	if(recv(RemoteSocket, remote, remotelen, 0) > 0)
-		{
-			printf("%s\n",remote);
-			if(check == 1)
+	{
+		printf("%s\n",remote);
+		if(check == 1)
 			datachange(remote,data,chagedata);	
-		}
-	LeaveCriticalSection(&cs);
+	}
 	return remotelen;
 }
 void datachange(char *data, char *find, char *change)
@@ -133,33 +125,33 @@ void datachange(char *data, char *find, char *change)
 	int changelen = strlen(find);
 	for(int i =0 ; i < datalen ; i++)
 	{
+		for(int j = 0 ; j < changelen ; j++)
+		{
+
+			if(data[i+j] == find[j])
+			{
+				count = count + 1;
+			}
+
+		}
+		if(count == changelen)
+		{
 			for(int j = 0 ; j < changelen ; j++)
 			{
-				
-				if(data[i+j] == find[j])
-				{
-				count = count + 1;
-				}
-				
+				data[i+j] = change[j];
 			}
-			if(count == changelen)
-			{
-				for(int j = 0 ; j < changelen ; j++)
-				{
-						data[i+j] = change[j];
-				}
-			}
-			count=0;
+		}
+		count=0;
 	}
 	return ;
 }
 bool addresschange(char *addr)
 {
 	struct hostent *hostinfo;
-	hostinfo = gethostbyname(addr);
+	hostinfo = gethostbyname(addr); //use getaddrinfo() but visual 10 not exist
 	if(hostinfo->h_addr_list[0] != NULL)
 	{
-		domainip = inet_ntoa(*(struct in_addr*)hostinfo->h_addr_list[0]);
+		domainip = inet_ntoa(*(struct in_addr*)hostinfo->h_addr_list[0]); // use inet_ntop() but visual 10 not exist
 		return true;
 	}
 	return false;
@@ -172,7 +164,6 @@ int main(int argc, char **argv)
 	SOCKET Client = INVALID_SOCKET;
 	struct sockaddr_in serverAddr;
 	int port = 0;
-	InitializeCriticalSection(&cs);
 	if(!(argc <= 3 && argc >=2))
 	{
 		printf("syntax : netserver <port> [-echo]\n");
@@ -208,18 +199,15 @@ int main(int argc, char **argv)
 
 		exit(0);
 	}
-while(1)
-{
-	while((Client = accept(Listen,NULL,NULL)) != INVALID_SOCKET)
+	while(1)
 	{
-		_beginthreadex(NULL,0, fn1,(void*)Client,0,NULL);
-	}	
-		memset(domainip,0x00,strlen(domainip));
-		DeleteCriticalSection(&cs);
-
-}
-closesocket(Listen);
-closesocket(Client);
-WSACleanup();
-return 0;
+		while((Client = accept(Listen,NULL,NULL)) != INVALID_SOCKET)
+		{
+			_beginthreadex(NULL,0, fn1,(void*)Client,0,NULL);
+		}	
+	}
+	closesocket(Listen);
+	closesocket(Client);
+	WSACleanup();
+	return 0;
 }
