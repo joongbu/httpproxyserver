@@ -6,8 +6,9 @@
 #include<process.h>
 #include<string.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 5000
+#define BUFFER 50000
 CRITICAL_SECTION cs;
+int rec;
 int proxy(char *sendbuf,int sendlen, char *remote);
 bool addresschange(char *addr);
 char *domainip; // 도메인 주소 변환
@@ -21,17 +22,15 @@ int getaddr(char *recv);
 unsigned int WINAPI fn1(void* p) {
 	char recvbuf[BUFFER] ;
 	int recvbuflen = BUFFER ;
-	char remotebuf[BUFFER] ; //받아오기
-	int remotelen = BUFFER; // 받아오기
 	SOCKET Client = (SOCKET) p ;
 	SOCKET RemoteSocket = INVALID_SOCKET;
 	struct sockaddr_in remoteAddr;
 	int port = 80;
-	InitializeCriticalSection(&cs);
+	memset(remotebuf,0x00,BUFFER);
 	memset(recvbuf,0x00,BUFFER);
 	if(recv(Client, recvbuf, recvbuflen,0) > 0)
 	{
-		printf("%s\n",recvbuf);	
+		printf("%s\n",recvbuf); 
 		if (getaddr(recvbuf) == 0)
 		{
 			if(addresschange(addr) == false)
@@ -64,49 +63,56 @@ unsigned int WINAPI fn1(void* p) {
 			exit(0);
 		}
 	}
-	memset(remotebuf,0x00,BUFFER);
+	
 	_beginthreadex(NULL,0, fn2,(void*)RemoteSocket,0,NULL);
 	while(1)
 	{
-		EnterCriticalSection(&cs);
-		if(remotebuf != NULL)
+
+
+
+		
+		if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
 		{
-			if(send(Client, remotebuf, remotelen, 0) == SOCKET_ERROR)
-			{
-				printf("Error : Send an initial client buffer\n");
-				closesocket(Client);
-				WSACleanup();
-				exit(0);
+			printf("Error : Send an initial client buffer\n");
+			closesocket(Client);
+			WSACleanup();
+			exit(0);
 
-			}
-			else
-			{
+		}
+
+		else
+		{
 			printf("send\n");
-			memset(remotebuf,0x00,BUFFER);
-			LeaveCriticalSection(&cs);
+			EnterCriticalSection(&cs);
+			printf("%s\n",remotebuf);
 			
-			}
-			
-		}	
-	}
 
+		} 
+		memset(remotebuf,0x00,BUFFER);
+		LeaveCriticalSection(&cs);
+	}
 	memset(domainip,0x00,strlen(domainip));
 	return 0;
 }
 unsigned int WINAPI fn2(void* p)
 {
+	
 	SOCKET RemoteSocket = (SOCKET) p ;
 	int check=1;
 	char *data = "hacking";
 	char *chagedata = "ABCDEFG";
-	EnterCriticalSection(&cs);
 	if(recv(RemoteSocket, remotebuf, remotelen, 0) > 0)
 	{
+		EnterCriticalSection(&cs);
 		printf("%s\n",remotebuf);
 		if(check == 1)
-			datachange(remotebuf,data,chagedata);	
+			datachange(remotebuf,data,chagedata); 
+		LeaveCriticalSection(&cs);
+
+
 	}
-	LeaveCriticalSection(&cs);
+
+	
 	return 0;
 }
 void resetAddress(sockaddr_in *serverAddr, ADDRESS_FAMILY sin_family, int port, ULONG sin_addr)
@@ -181,13 +187,14 @@ bool addresschange(char *addr)
 	return false;
 }
 int main(int argc, char **argv)
-{	
+{ 
 	DWORD TIME = 1;
 	WSADATA wsaData;
 	SOCKET Listen = INVALID_SOCKET;
 	SOCKET Client = INVALID_SOCKET;
 	struct sockaddr_in serverAddr;
 	int port = 0;
+	InitializeCriticalSection(&cs);
 	if(!(argc <= 3 && argc >=2))
 	{
 		printf("syntax : netserver <port> [-echo]\n");
@@ -228,10 +235,12 @@ int main(int argc, char **argv)
 		while((Client = accept(Listen,NULL,NULL)) != INVALID_SOCKET)
 		{
 			_beginthreadex(NULL,0, fn1,(void*)Client,0,NULL);
-		}	
+		} 
 	}
 	closesocket(Listen);
 	closesocket(Client);
 	WSACleanup();
 	return 0;
 }
+
+
