@@ -8,8 +8,8 @@
 #include <regex>
 #include<process.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 50000
-std::string getHostAddr(char *_data);
+#define BUFFER 50000 //tcp 패킷 최대 바이트 수
+std::string getAddr(char *_data);
 void checkArguments(int argc, char **argv);
 std::string URLToAddrStr(std::string addr);
 struct sockaddr_in initAddr(int port, std::string addr);
@@ -18,25 +18,22 @@ void errorHandle(std::string msg, SOCKET s);
 std::string web_error(char *_data);
 void backward(SOCKET Client, SOCKET RemoteSocket);
 void forward(struct sockaddr_in serverAddr);
-
+using namespace std;
 int main(int argc, char **argv)
 {
 	checkArguments(argc, argv);
 	initWSA();
-
-	int port = atoi(argv[1]);
+	int port = atoi(argv[1]);//인자로 받은 포트값 넣기
 	struct sockaddr_in serverAddr = initAddr(port, std::string(""));
 	std::thread(forward, serverAddr).join();
 }
 
-std::string getHostAddr(char *_data)
+std::string getAddr(char *_data)
 {
 	std::string data(_data);
 	std::smatch result;
 	std::regex pattern("Host: (.*)");
-	
-	if (std::regex_search(data, result, pattern)) {
-
+	if (std::regex_search(data, result, pattern)){
 		return result[1];
 	}
 	return "";
@@ -58,7 +55,7 @@ std::string URLToAddrStr(std::string addr)
 	struct sockaddr_in *sin;
 	int *listen_fd;
 	int listen_fd_num = 0;
-	char buf[80] = { 0x00, };
+	char buf[80] = {0x00, };
 	int i = 0;
 	memset(&hints, 0x00, sizeof(struct addrinfo));
 	hints.ai_flags = AI_PASSIVE;
@@ -132,30 +129,32 @@ std::string web_error(char *_data)
 }
 void backward(SOCKET Client, SOCKET RemoteSocket)
 {
-	char remotebuf[BUFFER];
+	char buf[BUFFER];
+	char *remotebuf;
 	int recvlen;
-	
-	memset(remotebuf, 0x00, BUFFER);
-		while ((recvlen = recv(RemoteSocket, remotebuf, BUFFER, 0)) > 0) {
-			printf("received %d bytes from host\n", recvlen);
-			printf("%s", remotebuf);
-			if (recvlen == 0)
-			{
-				memset(remotebuf, 0x00, BUFFER);
-				continue;
-			}
-			if (send(Client, remotebuf, recvlen, 0) == SOCKET_ERROR) {
-				printf("send to client failed.");
-				continue;
-			}
-			printf("클라이언트로 보냄\n");
-			memset(remotebuf, 0x00, BUFFER);
-			if (web_error(remotebuf).empty())
-				break;
-			else
-				continue;
-	
+	while ((recvlen = recv(RemoteSocket, buf, BUFFER, 0)) > 0) {
+		if (recvlen == -1)
+		{
+			cout << "error : backward recv()\n";
+			continue;
 		}
+		remotebuf = (char *)calloc(recvlen, sizeof(char)); //recv 받은 바이트 만큼 저장
+		memcpy(remotebuf, buf, recvlen);
+		cout << "Proxy => Web\n";
+		cout << remotebuf << "\n";
+		//delete[] buf;
+		memset(buf, NULL, BUFFER);
+		if (send(Client, remotebuf, recvlen, 0) == SOCKET_ERROR) {
+			printf("send to client failed.");
+			continue;
+		}
+	/*	if (web_error(remotebuf).empty())
+			break;
+		else
+			continue;*/
+		delete[] remotebuf;
+
+	}
 }
 
 void forward(struct sockaddr_in serverAddr)
@@ -171,49 +170,66 @@ void forward(struct sockaddr_in serverAddr)
 		errorHandle("ERROR : Listen\n", Server);
 	}
 
-	char recvbuf[BUFFER];
+	char buf[BUFFER];
+	char *recvbuf;
 	int recvbuflen;
+	int port; //input auto port
+	//여기서 443포트 확인
+
 	std::string hostAddr, domainip;
 	SOCKET RemoteSocket;
-	memset(recvbuf, 0x00, BUFFER);
+	//memset(recvbuf, 0x00, BUFFER);
 
 	while (true) {
 		if ((Client = accept(Server, NULL, NULL)) == INVALID_SOCKET) {
 			printf("error : accept\n");
 			continue;
 		}
-
-		while ((recvbuflen = recv(Client, recvbuf, BUFFER, 0)) > 0) {
-			printf("%s\n", recvbuf);
-			printf("Client -> recv\n");
-			hostAddr = getHostAddr(recvbuf);
-			std::cout << hostAddr;
-			if (hostAddr == "") {
+		port = 80;
+		//프록시 -> 웹 으로 요청하는 반복문
+		while ((recvbuflen = recv(Client, buf, BUFFER, 0)) > 0) {
+			if (recvbuflen == -1)
+			{
+				break;
+			}
+			recvbuf = (char *)calloc(recvbuflen, sizeof(char));
+			memcpy(recvbuf, buf, recvbuflen);
+			//delete[] buf; //메모리 해제
+			memset(buf, NULL, BUFFER); //NULL 초기화
+			cout << " HOST => Proxy \n";
+			cout << recvbuf <<"\n";
+			hostAddr = getAddr(recvbuf);
+			if (hostAddr == "")
+			{
 				printf("Empty Host Address..\n");
 				break;
 			}
-			domainip = URLToAddrStr(hostAddr);
-			std::cout << domainip << std::endl;
-			if (domainip == "") {
-				continue;
+			else if (strstr(hostAddr.c_str(), "443") != NULL)
+			{
+				cout << "ssl Host :" << hostAddr<<endl;
+				port = 443;
 			}
-			struct sockaddr_in remoteAddr;
-			int port = 80;
-			remoteAddr = initAddr(port, domainip);
+			
+			domainip = URLToAddrStr(hostAddr);
+			cout << domainip << endl;
+			if (domainip == "") {
+				break;
+			}
+			struct sockaddr_in remoteAddr; //proxy -> web send
+			remoteAddr = initAddr(port, domainip); //포트와 도메인 소켓에 넣기
 			if ((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
 				errorHandle("ERROR : Create a Socket for conneting to server\n", NULL);
 			}
 			if (connect(RemoteSocket, (struct sockaddr*) &remoteAddr, sizeof(remoteAddr)) == SOCKET_ERROR) {
 				errorHandle("Error : Connect to server\n", RemoteSocket);
-			}
-			printf("connect proxy\n");
+			}			
 			if (send(RemoteSocket, recvbuf, recvbuflen, 0) == SOCKET_ERROR)
 			{
 				printf("send to webserver failed.");
 				continue;
 			}
-			memset(recvbuf, 0x00, BUFFER);
-			printf("프록시로 보냄\n");
+			delete[] recvbuf;
+			cout<<"프록시로 보냄\n";
 			std::thread(backward, Client, RemoteSocket).detach();
 		}
 	}
