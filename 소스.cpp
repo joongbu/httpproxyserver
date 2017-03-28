@@ -1,4 +1,11 @@
 #define WIN32_LEAN_AND_MEAN
+//ssl include//
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include "openssl/applink.c"
+//
+
 #include <winsock2.h>
 #include <string>
 #include <stdio.h>
@@ -7,8 +14,9 @@
 #include <thread>
 #include <regex>
 #include<process.h>
+#include <fcntl.h>
 #pragma comment (lib, "Ws2_32.lib")
-#define BUFFER 50000 //tcp ��Ŷ �ִ� ����Ʈ ��
+#define BUFFER 70000 //tcp 패킷 최대 바이트 수
 std::string getAddr(char *_data);
 void checkArguments(int argc, char **argv);
 std::string URLToAddrStr(std::string addr);
@@ -17,15 +25,36 @@ void initWSA();
 void errorHandle(std::string msg, SOCKET s);
 std::string web_error(char *_data);
 void backward(SOCKET Client, SOCKET RemoteSocket);
-void forward(struct sockaddr_in serverAddr);
+void forward(struct sockaddr_in serverAddr,SOCKET Client);
+void open_socket(SOCKET &sock, struct sockaddr_in &sockaddr);
 using namespace std;
+
+
 int main(int argc, char **argv)
 {
 	checkArguments(argc, argv);
 	initWSA();
-	int port = atoi(argv[1]);//���ڷ� ���� ��Ʈ�� �ֱ�
+	int port = atoi(argv[1]);
 	struct sockaddr_in serverAddr = initAddr(port, std::string(""));
-	std::thread(forward, serverAddr).join();
+	SOCKET Client, Server;
+	open_socket(Server, serverAddr); //소켓 생성 함수
+	while(true)
+	{
+	if ((Client = accept(Server, NULL, NULL)) == INVALID_SOCKET) {
+		printf("error : accept\n");
+		
+	}
+	std::thread(forward, serverAddr, Client).detach();
+	}
+}
+//비동기 소켓 만드는 함수
+int nonblock(SOCKET &fd, int num)
+{
+	
+	unsigned long flags = num;
+	return ioctlsocket(fd, FIONBIO, &flags); //소켓의 입출력 모드를 제어하는 함수이다.
+	//(s,cmd,argp) s: 작업대상 소켓의 기술자 명시 cmd : 소켓 s가 수행할 커맨드, argp : command에 대한 입 출력 파라메터로 사용
+	// flags 1 이면 비동기 모드 0 이면 동기 모드
 }
 
 std::string getAddr(char *_data)
@@ -33,7 +62,8 @@ std::string getAddr(char *_data)
 	std::string data(_data);
 	std::smatch result;
 	std::regex pattern("Host: (.*)");
-	if (std::regex_search(data, result, pattern)){
+	if (std::regex_search(data, result, pattern))
+	{
 		return result[1];
 	}
 	return "";
@@ -43,7 +73,7 @@ void checkArguments(int argc, char **argv)
 {
 	if (!(argc <= 3 && argc >= 2))
 	{
-		printf("syntax : netserver <port> [-echo]\n");
+		printf("syntax : netserver <port>[-echo]\n");
 		exit(0);
 	}
 }
@@ -71,18 +101,17 @@ std::string URLToAddrStr(std::string addr)
 		listen_fd_num++;
 	}
 	listen_fd = (int *)malloc(sizeof(int)*listen_fd_num);
-	printf("Num %d", listen_fd_num);
+
 	for (rp = result, i = 0; rp != NULL; rp = rp->ai_next, i++)
 	{
 		if (rp->ai_family == AF_INET)
 		{
 			sin = (sockaddr_in *)rp->ai_addr;
 			inet_ntop(rp->ai_family, &sin->sin_addr, buf, sizeof(buf));
-			printf("<bind ���� %d %d %s>\n", rp->ai_protocol, rp->ai_socktype, buf);
 			return std::string(buf);
 		}
 	}
-	return std::string("");
+	return NULL;
 }
 
 struct sockaddr_in initAddr(int port, std::string addr)
@@ -127,110 +156,113 @@ std::string web_error(char *_data)
 	}
 	return "true";
 }
+
 void backward(SOCKET Client, SOCKET RemoteSocket)
 {
 	char buf[BUFFER];
 	char *remotebuf;
 	int recvlen;
-	while ((recvlen = recv(RemoteSocket, buf, BUFFER, 0)) > 0) {
-		if (recvlen == -1)
+	unsigned long flags = 1;
+	while ((recvlen = recv(RemoteSocket, buf, BUFFER, 0)) > 0)//타임아웃 걸기
+	{
+		std::cout << "수신완료" << endl;
+		if (recvlen == SOCKET_ERROR)
 		{
-			cout << "error : backward recv()\n";
+			std::cout << "error : backward recv()"<<endl;
 			continue;
 		}
-		remotebuf = (char *)calloc(recvlen, sizeof(char)); //recv ���� ����Ʈ ��ŭ ����
+		remotebuf = (char *)calloc(recvlen, sizeof(recvlen)); //recv 받은 바이트 만큼 저장
 		memcpy(remotebuf, buf, recvlen);
-		cout << "Proxy => Web\n";
-		cout << remotebuf << "\n";
-		//delete[] buf;
-		memset(buf, NULL, BUFFER);
+		std::cout << "클라이언트 => 웹으로 전송\n";
+		std::cout << "=============================================" << endl;
+		cout << "내용" << endl;
+		cout << remotebuf << endl;
 		if (send(Client, remotebuf, recvlen, 0) == SOCKET_ERROR) {
 			printf("send to client failed.");
 			continue;
 		}
-	/*	if (web_error(remotebuf).empty())
-			break;
-		else
-			continue;*/
-		delete[] remotebuf;
-
+		
 	}
+	std::cout << "클라이언트로 전송완료" << endl;
+	std::cout << " 쓰레드 종료" << endl;
 }
 
-void forward(struct sockaddr_in serverAddr)
+void forward(struct sockaddr_in serverAddr, SOCKET Client)
 {
-	SOCKET Client, Server;
-	if ((Server = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		errorHandle("ERROR : Create a Socket for connetcting to server\n", NULL);
-	}
-	if (::bind(Server, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) != 0) {
-		errorHandle("ERROR : Setup the TCP Listening socket\n", Server);
-	}
-	if (listen(Server, SOMAXCONN) == SOCKET_ERROR) {
-		errorHandle("ERROR : Listen\n", Server);
-	}
-
+	int port = 80;
 	char buf[BUFFER];
 	char *recvbuf;
 	int recvbuflen;
-	int port; //input auto port
-	//���⼭ 443��Ʈ Ȯ��
-
 	std::string hostAddr, domainip;
 	SOCKET RemoteSocket;
-	//memset(recvbuf, 0x00, BUFFER);
-
-	while (true) {
-		if ((Client = accept(Server, NULL, NULL)) == INVALID_SOCKET) {
-			printf("error : accept\n");
-			continue;
-		}
-		port = 80;
-		//���Ͻ� -> �� ���� ��û�ϴ� �ݺ���
-		while ((recvbuflen = recv(Client, buf, BUFFER, 0)) > 0) {
-			if (recvbuflen == -1)
+	struct sockaddr_in remoteAddr;
+		while ((recvbuflen = recv(Client, buf, BUFFER, 0)) > 0) 
+		{
+			if (recvbuflen == SOCKET_ERROR)
 			{
+				cout << "recv error " << endl;
 				break;
 			}
 			recvbuf = (char *)calloc(recvbuflen, sizeof(char));
 			memcpy(recvbuf, buf, recvbuflen);
-			//delete[] buf; //�޸� ����
-			memset(buf, NULL, BUFFER); //NULL �ʱ�ȭ
-			cout << " HOST => Proxy \n";
-			cout << recvbuf <<"\n";
-			hostAddr = getAddr(recvbuf);
+			hostAddr = getAddr(recvbuf); //여기서 443 포트 번호 확인해야한다.
+			std::cout << "site : " << hostAddr << endl;
+			std::cout << "=============================================" << endl;
+			std::cout << " 클라이언트 => 프록시으로 전송 \n";
+			std::cout << "=============================================" << endl;
+			std::cout << "포트번호 :" << port << endl;
+			std::cout << recvbuf << endl;
 			if (hostAddr == "")
 			{
 				printf("Empty Host Address..\n");
 				break;
 			}
-			else if (strstr(hostAddr.c_str(), "443") != NULL)
+			else
+				domainip = URLToAddrStr(hostAddr);
+			if (domainip == "")
 			{
-				cout << "ssl Host :" << hostAddr<<endl;
-				port = 443;
-			}
-			
-			domainip = URLToAddrStr(hostAddr);
-			cout << domainip << endl;
-			if (domainip == "") {
 				break;
 			}
-			struct sockaddr_in remoteAddr; //proxy -> web send
-			remoteAddr = initAddr(port, domainip); //��Ʈ�� ������ ���Ͽ� �ֱ�
+			std::cout << "아이피 확인" << endl;
+			std::cout << "=============================================" << endl;
+			std::cout << domainip << endl;
+			remoteAddr = initAddr(port, domainip); //포트와 도메인 소켓에 넣기
 			if ((RemoteSocket = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
 				errorHandle("ERROR : Create a Socket for conneting to server\n", NULL);
 			}
-			if (connect(RemoteSocket, (struct sockaddr*) &remoteAddr, sizeof(remoteAddr)) == SOCKET_ERROR) {
-				errorHandle("Error : Connect to server\n", RemoteSocket);
-			}			
+			
+			std::cout << "remote 소켓생성 완료" << endl;
+			
+			if (connect(RemoteSocket, (struct sockaddr*) &remoteAddr, sizeof(remoteAddr)) == SOCKET_ERROR)
+			{
+				std::cout << "연결실패" << endl;
+				break;
+			}
+			
+			std::cout << "remote 연결" << endl;
+			std::thread(backward, Client, RemoteSocket).detach();
+
 			if (send(RemoteSocket, recvbuf, recvbuflen, 0) == SOCKET_ERROR)
 			{
 				printf("send to webserver failed.");
 				continue;
 			}
-			delete[] recvbuf;
-			cout<<"���Ͻ÷� ����\n";
-			std::thread(backward, Client, RemoteSocket).detach();
+			
+			std::cout<<"프록시로 보냄\n"<<endl;
+			
 		}
+		memset(buf, NULL, BUFFER); //NULL 초기화
+		closesocket(Client);
+}
+void open_socket(SOCKET &sock, struct sockaddr_in &sockaddr)
+{
+	if ((sock = socket(PF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+		errorHandle("ERROR : Create a Socket for connetcting to server\n", NULL);
+	}
+	if (::bind(sock, (struct sockaddr*)&sockaddr, sizeof(sockaddr)) != 0) {
+		errorHandle("ERROR : Setup the TCP Listening socket\n", sock);
+	}
+	if (listen(sock, SOMAXCONN) == SOCKET_ERROR) {
+		errorHandle("ERROR : Listen\n", sock);
 	}
 }
